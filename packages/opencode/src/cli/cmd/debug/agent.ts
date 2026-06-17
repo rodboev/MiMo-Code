@@ -77,10 +77,11 @@ async function getAvailableTools(agent: Agent.Info) {
       const provider = yield* Provider.Service
       const registry = yield* ToolRegistry.Service
       const model = agent.model ?? (yield* provider.defaultModel())
-      return yield* registry.tools({
+      const exposure = yield* registry.tools({
         ...model,
         agent,
       })
+      return [...exposure.eager, ...exposure.deferred]
     }),
   )
 }

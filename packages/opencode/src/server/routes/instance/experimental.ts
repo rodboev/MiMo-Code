@@ -202,11 +202,12 @@ export const ExperimentalRoutes = lazy(() =>
           Effect.gen(function* () {
             const agents = yield* Agent.Service
             const registry = yield* ToolRegistry.Service
-            return yield* registry.tools({
+            const exposure = yield* registry.tools({
               providerID: ProviderID.make(provider),
               modelID: ModelID.make(model),
               agent: yield* agents.get(yield* agents.defaultAgent()),
             })
+            return [...exposure.eager, ...exposure.deferred]
           }),
         )
         return c.json(
