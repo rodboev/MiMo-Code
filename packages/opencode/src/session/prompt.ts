@@ -246,14 +246,15 @@ export const layer = Layer.effect(
           .getModel(input.providerID as ProviderID, input.modelID as ModelID)
           .pipe(Effect.catch(() => Effect.succeed(undefined)))
         if (!model) return empty
-        const [skills, env, instructions] = yield* Effect.all([
+        const [skills, env, mcpServersPrompt, instructions] = yield* Effect.all([
           sys.skills(ag),
           Effect.sync(() => sys.environment(model)),
+          sys.mcpServers(),
           instruction.system().pipe(Effect.orDie),
         ])
         // (checkpoint-writer never requests json_schema output, so STRUCTURED_OUTPUT_SYSTEM_PROMPT
         // is not included; parent's runLoop adds it conditionally based on user.format)
-        const additions = [...env, ...(skills ? [skills] : []), ...instructions.content]
+        const additions = [...env, ...(skills ? [skills] : []), ...instructions.content, ...mcpServersPrompt]
         const prefix = yield* buildLLMRequestPrefix({
           sessionID: input.sessionID,
           agent: ag,
@@ -811,7 +812,8 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         tools[toolExposure.search.id] = buildTool(toolExposure.search)
       }
 
-      for (const [key, item] of Object.entries(yield* mcp.tools())) {
+      const mcpLazy = (yield* config.get()).experimental?.mcp_lazy === true
+      for (const [key, item] of mcpLazy ? [] : Object.entries(yield* mcp.tools())) {
         const execute = item.execute
         if (!execute) continue
 
@@ -2847,9 +2849,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               return "continue" as const
             }
 
-            const [skills, env, instructions] = yield* Effect.all([
+            const [skills, env, mcpServersPrompt, instructions] = yield* Effect.all([
               sys.skills(agent),
               Effect.sync(() => sys.environment(model)),
+              sys.mcpServers(),
               instruction.system().pipe(Effect.orDie),
             ])
             // Surface which instruction files (CLAUDE.md, AGENTS.md, ...) were loaded.
@@ -2866,6 +2869,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               ...env,
               ...(skills ? [skills] : []),
               ...instructions.content,
+              ...mcpServersPrompt,
               ...(format.type === "json_schema" ? [STRUCTURED_OUTPUT_SYSTEM_PROMPT] : []),
             ]
             // Note: `buildLLMRequestPrefix` also returns a `tools` field, but we
