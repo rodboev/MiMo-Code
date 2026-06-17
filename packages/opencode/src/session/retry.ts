@@ -54,6 +54,15 @@ export function isRetryableTransientError(error: unknown): boolean {
 
   if (error.message === SSE_TIMEOUT_MESSAGE) return true
 
+  if (error.message) {
+    try {
+      const parsed = JSON.parse(error.message)
+      const nested = parsed?.error ?? parsed
+      if (nested?.type === "server_error" || nested?.code === "server_error") return true
+    } catch {}
+    if (error.message.includes("server_error") || error.message.includes("An error occurred while processing your request")) return true
+  }
+
   return false
 }
 
@@ -152,6 +161,12 @@ export function retryable(error: Err) {
   }
   if (json.type === "error" && typeof json.error?.code === "string" && json.error.code.includes("rate_limit")) {
     return "Rate Limited"
+  }
+  if (json.type === "error" && json.error?.type === "server_error") {
+    return "Provider server error"
+  }
+  if (typeof json.error?.code === "string" && json.error.code === "server_error") {
+    return "Provider server error"
   }
   return undefined
 }
