@@ -1,17 +1,9 @@
-Search RAW conversation trajectory: prior user/assistant messages, tool inputs, tool errors.
+Search raw conversation history when curated `memory` is not enough.
 
-USE ONLY WHEN MEMORY SEARCH RETURNS NOTHING USEFUL.
+Prefer `memory` first. Use `history` for verbatim recall, old tool traces, or cases where memory has no useful hit.
 
-memory is your curated notebook — small, fast, semantically organized. ALWAYS try `memory` first.
-history is the unindexed firehose of your past sessions: bigger, noisier, slower, and tool result
-cap will likely truncate `around` output forcing a follow-up Grep/Read. Reach for it as a last
-resort, e.g.:
-  - memory had no entry, but you suspect this came up in a prior session
-  - you need verbatim recall of something the memory summary glossed over
-  - debugging "did I already try X" across the project
+Actions:
+- `search`: full-text search over raw messages and tool traffic.
+- `around`: fetch nearby messages for a specific `message_id`.
 
-Two operations:
-  - search: FTS BM25 over text/tool kinds (returns snippets + message_ids)
-  - around: given a search hit's message_id, pull ±N surrounding messages from the raw store
-
-Default scope is current project; pass scope="global" to search every project on this machine.
+Default scope is the current project; use `scope="global"` to search across projects.

@@ -30,6 +30,8 @@ import { EffectBridge } from "@/effect"
 import { InstanceState } from "@/effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import * as CrossSpawnSpawner from "@/effect/cross-spawn-spawner"
+import { Flag } from "@/flag/flag"
+import * as Wildcard from "@/util/wildcard"
 
 const log = Log.create({ service: "mcp" })
 const DEFAULT_TIMEOUT = 30_000
@@ -135,6 +137,42 @@ function isMcpConfigured(entry: McpEntry): entry is ConfigMCP.Info {
 }
 
 const sanitize = (s: string) => s.replace(/[^a-zA-Z0-9_-]/g, "_")
+
+function allowlistPatterns() {
+  return (Flag.MIMOCODE_EXPERIMENTAL_MCP_TOOL_ALLOWLIST ?? "")
+    .split(/[\r\n,]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function shouldExposeTool(clientName: string, toolName: string, toolID: string) {
+  if (Flag.MIMOCODE_EXPERIMENTAL_DISABLE_MCP_TOOLS) return false
+
+  const patterns = allowlistPatterns()
+  if (patterns.length === 0) return true
+
+  const sanitizedClient = sanitize(clientName)
+  const sanitizedTool = sanitize(toolName)
+  const candidates = new Set([
+    toolID,
+    toolName,
+    sanitizedTool,
+    clientName,
+    sanitizedClient,
+    `${clientName}:${toolName}`,
+    `${sanitizedClient}:${sanitizedTool}`,
+    `${clientName}_${toolName}`,
+    `${sanitizedClient}_${sanitizedTool}`,
+  ])
+
+  for (const pattern of patterns) {
+    for (const candidate of candidates) {
+      if (Wildcard.match(candidate, pattern)) return true
+    }
+  }
+
+  return false
+}
 
 // Convert MCP tool definition to AI SDK Tool type
 function convertMcpTool(mcpTool: MCPToolDef, client: MCPClient, timeout?: number): Tool {
@@ -668,8 +706,22 @@ export const layer = Layer.effect(
             }
 
             const timeout = entry?.timeout ?? defaultTimeout
+            let filteredOut = 0
             for (const mcpTool of listed) {
-              result[sanitize(clientName) + "_" + sanitize(mcpTool.name)] = convertMcpTool(mcpTool, client, timeout)
+              const toolID = sanitize(clientName) + "_" + sanitize(mcpTool.name)
+              if (!shouldExposeTool(clientName, mcpTool.name, toolID)) {
+                filteredOut++
+                continue
+              }
+              result[toolID] = convertMcpTool(mcpTool, client, timeout)
+            }
+
+            if (filteredOut > 0) {
+              log.info("filtered MCP tools from model-visible surface", {
+                clientName,
+                kept: listed.length - filteredOut,
+                filteredOut,
+              })
             }
           }),
         { concurrency: "unbounded" },
