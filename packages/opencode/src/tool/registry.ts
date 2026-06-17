@@ -30,11 +30,13 @@ import { Log } from "@/util"
 import { LspTool } from "./lsp"
 import * as Truncate from "./truncate"
 import { ApplyPatchTool } from "./apply_patch"
+import { McpSearchTool } from "./mcp-search"
 import { ChangeDirectoryTool } from "./change-directory"
 import { Glob } from "@mimo-ai/shared/util/glob"
 import path from "path"
 import { pathToFileURL } from "url"
-import { Effect, Layer, Context } from "effect"
+import { MCP } from "../mcp"
+import { Effect, Layer, Context, Option } from "effect"
 import { FetchHttpClient, HttpClient } from "effect/unstable/http"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import * as CrossSpawnSpawner from "@/effect/cross-spawn-spawner"
@@ -204,6 +206,8 @@ export const layer = Layer.effect(
     const memorytool = yield* MemoryTool
     const tasktool = yield* TaskTool
     const workflowtool = yield* WorkflowTool
+    const mcpServiceOpt = yield* Effect.serviceOption(MCP.Service)
+    const mcpsearch = Option.isSome(mcpServiceOpt) ? yield* McpSearchTool : undefined
     const agent = yield* Agent.Service
 
     const state = yield* InstanceState.make<State>(
@@ -263,9 +267,14 @@ export const layer = Layer.effect(
           }
         }
 
-        yield* config.get()
+        const cfg = yield* config.get()
         const questionEnabled =
           ["app", "cli", "desktop"].includes(Flag.MIMOCODE_CLIENT) || Flag.MIMOCODE_ENABLE_QUESTION_TOOL
+
+        const mcpLazyEnabled = cfg.experimental?.mcp_lazy === true
+        const mcpsearchDef: Tool.Def[] = mcpLazyEnabled && mcpsearch
+          ? [yield* Tool.init(mcpsearch)]
+          : []
 
         const tool = yield* Effect.all({
           invalid: Tool.init(invalid),
@@ -319,6 +328,7 @@ export const layer = Layer.effect(
             tool.history,
             tool.task,
             ...(Flag.MIMOCODE_EXPERIMENTAL_WORKFLOW_TOOL ? [tool.workflow] : []),
+            ...mcpsearchDef,
           ].filter((tool) => shouldExposeBuiltinTool(tool.id)),
           actor: tool.actor,
           read: tool.read,
@@ -503,7 +513,7 @@ export const layer = Layer.effect(
 
 export const defaultLayer = Layer.suspend(() =>
   layer.pipe(
-    Layer.provide(Config.defaultLayer),
+    Layer.provide(Layer.mergeAll(Config.defaultLayer, MCP.defaultLayer)),
     Layer.provide(Plugin.defaultLayer),
     Layer.provide(Question.defaultLayer),
     Layer.provide(Todo.defaultLayer),

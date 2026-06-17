@@ -389,6 +389,10 @@ const InfoSchema = Schema.Struct({
       mcp_timeout: Schema.optional(PositiveInt).annotate({
         description: "Timeout in milliseconds for model context protocol (MCP) requests",
       }),
+      mcp_lazy: Schema.optional(Schema.Boolean).annotate({
+        description:
+          "Enable lazy loading of MCP tools. When enabled, MCP tools are not loaded into context automatically. Instead, use the mcp_search tool to discover and call MCP tools on-demand.",
+      }),
       predict_next_prompt: Schema.optional(Schema.Boolean).annotate({
         description:
           "Predict the user's likely next prompt after each turn and show it as inline ghost text (Tab to accept). Enabled by default; set to false to disable.",
