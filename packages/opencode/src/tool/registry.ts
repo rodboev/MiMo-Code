@@ -62,8 +62,63 @@ import { shellWrap } from "./shell-wrap"
 import * as BashInteractive from "./bash-interactive"
 import { resolveInvocationStyle } from "./invocation-style"
 import { BuiltinWorkflow } from "@/workflow/builtin"
+import * as Wildcard from "@/util/wildcard"
 
 const log = Log.create({ service: "tool.registry" })
+
+const DEFERRED_EAGER_BUILTINS = new Set([
+  BashTool.id,
+  ReadTool.id,
+  GlobTool.id,
+  GrepTool.id,
+  ApplyPatchTool.id,
+  WriteTool.id,
+  WebFetchTool.id,
+  ChangeDirectoryTool.id,
+])
+
+const ToolSearchParameters = z.object({
+  query: z.string().describe("Search query for matching tools."),
+  limit: z.number().int().min(1).max(20).optional().describe("Maximum results to return."),
+})
+
+function normalizeToolSearch(text: string) {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()
+}
+
+function toolSearchScore(query: string, tool: Tool.Def) {
+  const q = normalizeToolSearch(query)
+  if (!q) return 1
+  const haystack = normalizeToolSearch(`${tool.id} ${tool.description}`)
+  if (!haystack) return 0
+  if (tool.id.toLowerCase() === query.trim().toLowerCase()) return 10_000
+  if (tool.id.toLowerCase().includes(query.trim().toLowerCase())) return 5_000
+  const terms = q.split(/\s+/).filter(Boolean)
+  if (terms.length === 0) return 1
+  let score = 0
+  for (const term of terms) {
+    if (!haystack.includes(term)) continue
+    score += tool.id.toLowerCase().includes(term) ? 200 : 50
+  }
+  return score
+}
+
+function builtinAllowlistPatterns() {
+  return (Flag.MIMOCODE_EXPERIMENTAL_BUILTIN_TOOL_ALLOWLIST ?? "")
+    .split(/[\r\n,]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function shouldExposeBuiltinTool(toolID: string) {
+  if (toolID === InvalidTool.id) return true
+  if (Flag.MIMOCODE_EXPERIMENTAL_DISABLE_BUILTIN_TOOLS) return false
+
+  const patterns = builtinAllowlistPatterns()
+  if (patterns.length === 0) return true
+
+  return patterns.some((pattern) => Wildcard.match(toolID, pattern))
+}
 
 export function renderWorkflowCatalog(): string {
   const list = BuiltinWorkflow.list()
@@ -101,11 +156,17 @@ type State = {
   read: ReadDef
 }
 
+type ToolExposure = {
+  eager: Tool.Def[]
+  deferred: Tool.Def[]
+  search?: Tool.Def
+}
+
 export interface Interface {
   readonly ids: () => Effect.Effect<string[]>
   readonly all: () => Effect.Effect<Tool.Def[]>
   readonly named: () => Effect.Effect<{ actor: ActorDef; read: ReadDef }>
-  readonly tools: (model: { providerID: ProviderID; modelID: ModelID; agent: Agent.Info }) => Effect.Effect<Tool.Def[]>
+  readonly tools: (model: { providerID: ProviderID; modelID: ModelID; agent: Agent.Info }) => Effect.Effect<ToolExposure>
   readonly reload: () => Effect.Effect<void>
 }
 
@@ -258,7 +319,7 @@ export const layer = Layer.effect(
             tool.history,
             tool.task,
             ...(Flag.MIMOCODE_EXPERIMENTAL_WORKFLOW_TOOL ? [tool.workflow] : []),
-          ],
+          ].filter((tool) => shouldExposeBuiltinTool(tool.id)),
           actor: tool.actor,
           read: tool.read,
         }
@@ -280,18 +341,9 @@ export const layer = Layer.effect(
       const list = yield* skill.available(agent)
       if (list.length === 0) return "No skills are currently available."
       return [
-        "Load a specialized skill that provides domain-specific instructions and workflows.",
-        "",
-        "When you recognize that a task matches one of the available skills listed below, use this tool to load the full skill instructions.",
-        "",
-        "The skill will inject detailed instructions, workflows, and access to bundled resources (scripts, references, templates) into the conversation context.",
-        "",
-        'Tool output includes a `<skill_content name="...">` block with the loaded content.',
-        "",
-        "The following skills provide specialized sets of instructions for particular tasks",
-        "Invoke this tool to load a skill when a task matches one of the available skills listed below:",
-        "",
-        Skill.fmt(list, { verbose: false }),
+        "Load a specialized skill by exact name.",
+        "Available skills are already listed in the system prompt.",
+        `Visible skill names: ${list.map((item) => item.name).join(", ")}`,
       ].join("\n")
     })
 
@@ -307,13 +359,53 @@ export const layer = Layer.effect(
         (item) => Permission.evaluate("task", item.name, agent.permission).action !== "deny",
       )
       const list = filtered.toSorted((a, b) => a.name.localeCompare(b.name))
-      const description = list
-        .map(
-          (item) =>
-            `- ${item.name}: ${item.description ?? "This subagent should only be called manually by the user."}`,
-        )
-        .join("\n")
-      return ["Available agent types and the tools they have access to:", description].join("\n")
+      return `Available subagent types: ${list.map((item) => item.name).join(", ")}`
+    })
+
+    const createToolSearchTool = (catalog: { eager: Tool.Def[]; deferred: Tool.Def[] }): Tool.Def => ({
+      id: "tool_search",
+      description: "Search available tools and load deferred ones for this turn.",
+      parameters: ToolSearchParameters,
+      execute: (args, ctx) =>
+        Effect.gen(function* () {
+          const limit = Math.max(1, Math.min(args.limit ?? 5, 20))
+          const searchable = [...catalog.eager, ...catalog.deferred].filter((tool) => tool.id !== InvalidTool.id)
+          const results = searchable
+            .map((tool) => ({
+              tool,
+              score: toolSearchScore(args.query, tool),
+              deferred: catalog.deferred.some((item) => item.id === tool.id),
+            }))
+            .filter((item) => item.score > 0)
+            .sort((a, b) => b.score - a.score || a.tool.id.localeCompare(b.tool.id))
+            .slice(0, limit)
+
+          const materialized = results.filter((item) => item.deferred).map((item) => item.tool.id)
+          const activate =
+            ctx.extra && typeof ctx.extra["activateDeferredTools"] === "function"
+              ? (ctx.extra["activateDeferredTools"] as (toolIDs: string[]) => void)
+              : undefined
+          if (activate && materialized.length) activate(materialized)
+
+          return {
+            title: "Tool Search",
+            metadata: { materialized, count: results.length },
+            output: JSON.stringify(
+              {
+                query: args.query,
+                materialized,
+                results: results.map((item) => ({
+                  name: item.tool.id,
+                  deferred: item.deferred,
+                  description: item.tool.description,
+                  input_schema: z.toJSONSchema(item.tool.parameters),
+                })),
+              },
+              null,
+              2,
+            ),
+          }
+        }),
     })
 
     const tools: Interface["tools"] = Effect.fn("ToolRegistry.tools")(function* (input) {
@@ -345,7 +437,7 @@ export const layer = Layer.effect(
       const cfg = yield* config.get()
       const resolveStyle = (toolId: string): "json" | "shell" => resolveInvocationStyle(cfg.tool, toolId)
 
-      return yield* Effect.forEach(
+      const resolved = yield* Effect.forEach(
         filtered,
         Effect.fnUntraced(function* (tool: Tool.Def) {
           using _ = log.time(tool.id)
@@ -378,6 +470,20 @@ export const layer = Layer.effect(
         }),
         { concurrency: "unbounded" },
       )
+
+      if (!Flag.MIMOCODE_EXPERIMENTAL_DEFER_BUILTIN_TOOLS) {
+        return { eager: resolved, deferred: [] }
+      }
+
+      const builtinIDs = new Set((yield* InstanceState.get(state)).builtin.map((tool) => tool.id))
+      const eager = resolved.filter((tool) => !builtinIDs.has(tool.id) || DEFERRED_EAGER_BUILTINS.has(tool.id))
+      const deferred = resolved.filter((tool) => builtinIDs.has(tool.id) && !DEFERRED_EAGER_BUILTINS.has(tool.id))
+
+      return {
+        eager,
+        deferred,
+        search: createToolSearchTool({ eager, deferred }),
+      }
     })
 
     const named: Interface["named"] = Effect.fn("ToolRegistry.named")(function* () {

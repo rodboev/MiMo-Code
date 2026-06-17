@@ -632,11 +632,13 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       messages: MessageV2.WithParts[]
       agentID?: string
       task_id?: string
+      activatedDeferredTools?: Set<string>
     }) {
       using _ = log.time("resolveTools")
       const tools: Record<string, AITool> = {}
       const run = yield* runner()
       const promptOps = yield* ops()
+      const deferredToolMeta = new Set<string>()
 
       // Per-tool runtime whitelist: when the LLM call is being made on behalf
       // of a registered actor (subagent or peer), look up the actor row and,
@@ -676,7 +678,12 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         abort: options.abortSignal!,
         messageID: input.processor.message.id,
         callID: options.toolCallId,
-        extra: { model: input.model, bypassAgentCheck: input.bypassAgentCheck, promptOps },
+        extra: {
+          model: input.model,
+          bypassAgentCheck: input.bypassAgentCheck,
+          promptOps,
+          activateDeferredTools: materializeDeferredTools,
+        },
         agent: input.agent.name,
         actorID: input.agentID,
         taskId: input.task_id,
@@ -713,13 +720,9 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             .pipe(Effect.orDie),
       })
 
-      for (const item of yield* registry.tools({
-        modelID: ModelID.make(input.model.api.id),
-        providerID: input.model.providerID,
-        agent: input.agent,
-      })) {
+      const buildTool = (item: Tool.Def) => {
         const schema = ProviderTransform.schema(input.model, z.toJSONSchema(item.parameters))
-        tools[item.id] = tool({
+        return tool({
           description: item.description,
           inputSchema: jsonSchema(schema),
           execute(args, options) {
@@ -814,6 +817,59 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             )
           },
         })
+      }
+
+      const createDeferredStub = (item: Tool.Def) => {
+        const stub = tool({
+          description: `Deferred tool stub for "${item.id}". Use tool_search to inspect and load it before calling.`,
+          inputSchema: jsonSchema({ type: "object", additionalProperties: true } as JSONSchema7),
+          async execute() {
+            materializeDeferredTools([item.id])
+            return {
+              title: "Deferred Tool Loaded",
+              output: `The "${item.id}" tool was deferred and has now been loaded for this turn. Use tool_search to inspect its schema, then call "${item.id}" again with valid arguments.`,
+              metadata: { deferred: true, materialized: [item.id] },
+            }
+          },
+        }) as AITool & { deferLoading?: boolean; __mimocodeDeferredStub?: boolean }
+        stub.deferLoading = true
+        stub.__mimocodeDeferredStub = true
+        return stub
+      }
+
+      const materializeDeferredTools = (toolIDs: string[]) => {
+        for (const toolID of toolIDs) {
+          if (deferredToolMeta.has(toolID)) continue
+          const deferred = deferredTools.get(toolID)
+          if (!deferred) continue
+          tools[toolID] = buildTool(deferred)
+          deferredToolMeta.add(toolID)
+          input.activatedDeferredTools?.add(toolID)
+        }
+      }
+
+      const toolExposure = yield* registry.tools({
+        modelID: ModelID.make(input.model.api.id),
+        providerID: input.model.providerID,
+        agent: input.agent,
+      })
+      const deferredTools = new Map(toolExposure.deferred.map((item) => [item.id, item] as const))
+
+      for (const item of toolExposure.eager) {
+        tools[item.id] = buildTool(item)
+      }
+
+      for (const item of toolExposure.deferred) {
+        if (input.activatedDeferredTools?.has(item.id)) {
+          tools[item.id] = buildTool(item)
+          deferredToolMeta.add(item.id)
+          continue
+        }
+        tools[item.id] = createDeferredStub(item)
+      }
+
+      if (toolExposure.search) {
+        tools[toolExposure.search.id] = buildTool(toolExposure.search)
       }
 
       for (const [key, item] of Object.entries(yield* mcp.tools())) {
@@ -2430,6 +2486,8 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           })
         })
 
+        const activatedDeferredTools = new Set<string>()
+
         while (true) {
           // F55: only main agent sets session status to busy; subagent runners
           // must not touch session-level status (Runner.onBusy is Effect.void
@@ -2869,6 +2927,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               messages: msgs,
               agentID: lastUser.agentID,
               task_id,
+              activatedDeferredTools,
             })
 
             if (lastUser.format?.type === "json_schema") {
