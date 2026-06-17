@@ -57,21 +57,15 @@ const Parameters = z.object({
   timeout: z.number().describe("Optional timeout in milliseconds").optional(),
   workdir: z
     .string()
-    .describe(
-      `The working directory to run the command in. Defaults to the current directory. Use this instead of 'cd' commands.`,
-    )
+    .describe(`Working directory for the command. Use this instead of 'cd'.`)
     .optional(),
   interactive: z
     .boolean()
-    .describe(
-      "Set to true when the command requires user interaction (password input, y/N confirmation, SSH key passphrase, etc). The terminal will be handed to the user for direct interaction.",
-    )
+    .describe("Set true only when the command requires user input.")
     .optional(),
   description: z
     .string()
-    .describe(
-      "Clear, concise description of what this command does in 5-10 words. Examples:\nInput: ls\nOutput: Lists files in current directory\n\nInput: git status\nOutput: Shows working tree status\n\nInput: npm install\nOutput: Installs package dependencies\n\nInput: mkdir foo\nOutput: Creates directory 'foo'",
-    ),
+    .describe("Short description of the command in 5-10 words."),
 })
 
 type Part = {

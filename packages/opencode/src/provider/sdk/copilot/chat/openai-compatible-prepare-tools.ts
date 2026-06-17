@@ -11,6 +11,7 @@ export function prepareTools({
     | undefined
     | Array<{
         type: "function"
+        defer_loading?: true
         function: {
           name: string
           description: string | undefined
@@ -31,6 +32,7 @@ export function prepareTools({
 
   const openaiCompatTools: Array<{
     type: "function"
+    defer_loading?: true
     function: {
       name: string
       description: string | undefined
@@ -42,8 +44,10 @@ export function prepareTools({
     if (tool.type === "provider") {
       toolWarnings.push({ type: "unsupported", feature: `tool type: ${tool.type}` })
     } else {
+      const deferLoading = (tool as { deferLoading?: boolean }).deferLoading === true
       openaiCompatTools.push({
         type: "function",
+        ...(deferLoading ? { defer_loading: true as const } : {}),
         function: {
           name: tool.name,
           description: tool.description,
