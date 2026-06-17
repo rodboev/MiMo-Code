@@ -58,25 +58,18 @@ export function isTransientCapacityError(error: unknown): boolean {
   return isRetryableTransientError(error)
 }
 
-/**
- * Persistent-retry schedule with exponential backoff.
- *
- * Exponential backoff 500ms × 2 (i.e. 0.5, 1, 2, 4, 8, 16, 32, 64, 128, 256s),
- * each individual delay capped at 5 minutes, total attempts capped at 10.
- *
- * Worst-case total = 11 attempts × chunkTimeout + cumulative backoff
- *                  ≈ 11 × 8min + 9min ≈ 97 min (with DEFAULT_CHUNK_TIMEOUT = 8min).
- *
- * Intentionally NOT capped via Schedule.upTo() — retry persistence under
- * brief upstream outages is the design goal. Bounding per-attempt latency
- * via chunkTimeout is the primary lever for hang-time control.
- */
 export const persistentRetrySchedule = Schedule.exponential("500 millis", 2).pipe(
   Schedule.modifyDelay((_, delay) =>
     Effect.succeed(Duration.isLessThanOrEqualTo(delay, Duration.minutes(5)) ? delay : Duration.minutes(5)),
   ),
-  Schedule.both(Schedule.recurs(10)),
+  Schedule.both(Schedule.recurs(3)),
 )
+
+const MODEL_FALLBACK_CHAINS: Record<string, string[]> = {
+  "gpt-5.5-codex": ["gpt-5.4", "gpt-5.4-mini"],
+  "gpt-5.5-codex-fast": ["gpt-5.4-fast", "gpt-5.4-mini-fast"],
+  "gpt-5.4": ["gpt-5.4-mini"],
+}
 
 /**
  * Memory-system instructions appended to the main agent's system prompt.
@@ -674,21 +667,52 @@ const live: Layer.Layer<
                 )
               })
 
-            const streamWithTelemetry = run({ ...input, abort: ctrl.signal }).pipe(
-              Effect.tapError((error) => {
-                if (!isTransientCapacityError(error)) return Effect.void
-                return Ref.updateAndGet(attemptRef, (n) => n + 1).pipe(
-                  Effect.flatMap((nextAttempt) => publishRetryEvent(error, nextAttempt))
+            const fallbackChain = MODEL_FALLBACK_CHAINS[input.model.id] ?? []
+            const modelIds = [input.model.id, ...fallbackChain]
+
+            const tryModel = (idx: number): Effect.Effect<typeof result, unknown> =>
+              Effect.gen(function* () {
+                const currentModel = idx === 0
+                  ? input.model
+                  : yield* provider.getModel(input.model.providerID, modelIds[idx] as any)
+                const currentInput = { ...input, model: currentModel, abort: ctrl.signal }
+
+                yield* Ref.set(attemptRef, 0)
+
+                return yield* run(currentInput).pipe(
+                  Effect.tapError((error) => {
+                    if (!isTransientCapacityError(error)) return Effect.void
+                    return Ref.updateAndGet(attemptRef, (n) => n + 1).pipe(
+                      Effect.flatMap((nextAttempt) => publishRetryEvent(error, nextAttempt))
+                    )
+                  }),
+                  Effect.retry({
+                    while: isTransientCapacityError,
+                    schedule: persistentRetrySchedule,
+                  }),
                 )
               })
+
+            type Result = Awaited<ReturnType<typeof run extends (...args: any) => Effect.Effect<infer R, any> ? (...args: any) => Promise<R> : never>>
+
+            const withFallbacks = modelIds.reduceRight(
+              (next: Effect.Effect<any, unknown>, _id: string, idx: number) =>
+                tryModel(idx).pipe(
+                  Effect.catchAll((error) => {
+                    if (idx < modelIds.length - 1) {
+                      log.warn("model exhausted retries, trying fallback", {
+                        failed: modelIds[idx],
+                        next: modelIds[idx + 1],
+                      })
+                      return next
+                    }
+                    return Effect.fail(error)
+                  }),
+                ),
+              Effect.fail(new Error("no models configured")) as Effect.Effect<any, unknown>,
             )
 
-            const result = yield* streamWithTelemetry.pipe(
-              Effect.retry({
-                while: isTransientCapacityError,
-                schedule: persistentRetrySchedule,
-              }),
-            )
+            const result = yield* withFallbacks
 
             return Stream.fromAsyncIterable(result.fullStream, (e) => (e instanceof Error ? e : new Error(String(e))))
           }),
