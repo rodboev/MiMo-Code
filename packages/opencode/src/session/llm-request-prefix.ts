@@ -64,11 +64,12 @@ export const buildLLMRequestPrefix = Effect.fn("Session.buildLLMRequestPrefix")(
   })
 
   // Resolve tools using parent agent's permission and toolAllowlist
-  const toolDefs = yield* toolRegistry.tools({
+  const toolExposure = yield* toolRegistry.tools({
     modelID: ModelID.make(input.model.api.id),
     providerID: input.model.providerID,
     agent: input.agent,
   })
+  const toolDefs = [...toolExposure.eager, ...toolExposure.deferred]
   const tools: Record<string, AITool> = {}
   for (const item of toolDefs) {
     const schema = ProviderTransform.schema(input.model, z.toJSONSchema(item.parameters))
