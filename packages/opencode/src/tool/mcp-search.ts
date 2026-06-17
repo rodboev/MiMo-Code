@@ -11,7 +11,7 @@ const parameters = z.object({
   query: z.string().optional().describe("Search query (for 'search' operation)"),
   server: z.string().optional().describe("MCP server name (required for 'describe' and 'call')"),
   tool: z.string().optional().describe("Tool name on that server (required for 'describe' and 'call')"),
-  args: z.record(z.unknown()).optional().describe("Tool arguments as a JSON object (for 'call' operation)"),
+  args: z.record(z.string(), z.unknown()).optional().describe("Tool arguments as a JSON object (for 'call' operation)"),
 })
 
 type McpSearchParams = z.infer<typeof parameters>
