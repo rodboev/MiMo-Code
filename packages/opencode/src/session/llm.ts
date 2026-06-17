@@ -698,7 +698,7 @@ const live: Layer.Layer<
             const withFallbacks = modelIds.reduceRight(
               (next: Effect.Effect<any, unknown>, _id: string, idx: number) =>
                 tryModel(idx).pipe(
-                  Effect.catchAll((error) => {
+                  Effect.catch((error) => {
                     if (idx < modelIds.length - 1) {
                       log.warn("model exhausted retries, trying fallback", {
                         failed: modelIds[idx],
