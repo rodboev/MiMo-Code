@@ -68,7 +68,7 @@ import * as Wildcard from "@/util/wildcard"
 
 const log = Log.create({ service: "tool.registry" })
 
-const DEFERRED_EAGER_BUILTINS = new Set([
+const DEFERRED_EAGER_BUILTINS = new Set<string>([
   BashTool.id,
   ReadTool.id,
   GlobTool.id,
@@ -372,7 +372,7 @@ export const layer = Layer.effect(
       return `Available subagent types: ${list.map((item) => item.name).join(", ")}`
     })
 
-    const createToolSearchTool = (catalog: { eager: Tool.Def[]; deferred: Tool.Def[] }): Tool.Def => ({
+    const createToolSearchTool = (catalog: { eager: Tool.Def[]; deferred: Tool.Def[] }): Tool.Def<typeof ToolSearchParameters> => ({
       id: "tool_search",
       description: "Search available tools and load deferred ones for this turn.",
       parameters: ToolSearchParameters,

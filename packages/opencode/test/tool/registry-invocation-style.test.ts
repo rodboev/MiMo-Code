@@ -1,6 +1,6 @@
 import { afterEach, describe, expect } from "bun:test"
 import { Effect, Layer } from "effect"
-import { ToolRegistry } from "../../src/tool"
+import { ToolRegistry, Tool } from "../../src/tool"
 import { Agent } from "../../src/agent/agent"
 import { ProviderID, ModelID } from "../../src/provider/schema"
 import * as CrossSpawnSpawner from "../../src/effect/cross-spawn-spawner"
@@ -11,6 +11,12 @@ import { Instance } from "../../src/project/instance"
 const it = testEffect(
   Layer.mergeAll(ToolRegistry.defaultLayer, Agent.defaultLayer, CrossSpawnSpawner.defaultLayer),
 )
+
+const expose = (tools: { eager: Tool.Def[]; deferred: Tool.Def[]; search?: Tool.Def }) => [
+  ...tools.eager,
+  ...tools.deferred,
+  ...(tools.search ? [tools.search] : []),
+]
 
 afterEach(async () => {
   await Instance.disposeAll()
@@ -29,7 +35,7 @@ describe("ToolRegistry.tools: invocation style resolution", () => {
           modelID: ModelID.make("opencode/claude-sonnet-4-6"),
           agent: general,
         })
-        const task = tools.find((t) => t.id === "task")
+        const task = expose(tools).find((t) => t.id === "task")
         expect(task).toBeDefined()
         // JSON mode → parameters is an object wrapping an `operation` discriminated
         // union (discriminator "action"). Confirm `operation` is present and `script`
@@ -56,7 +62,7 @@ describe("ToolRegistry.tools: invocation style resolution", () => {
               modelID: ModelID.make("opencode/claude-sonnet-4-6"),
               agent: general,
             })
-            const task = tools.find((t) => t.id === "task")
+            const task = expose(tools).find((t) => t.id === "task")
             expect(task).toBeDefined()
             // Task has shell field (Task 13 added it). Shell mode is active: parameters has `script`.
             const schema = task!.parameters as any
@@ -80,7 +86,7 @@ describe("ToolRegistry.tools: invocation style resolution", () => {
             modelID: ModelID.make("opencode/claude-sonnet-4-6"),
             agent: general,
           })
-          const read = tools.find((t) => t.id === "read")
+          const read = expose(tools).find((t) => t.id === "read")
           expect(read).toBeDefined()
           const schema = read!.parameters as any
           // Original `read` parameters has file_path; shell wrap would expose `script`
@@ -106,7 +112,7 @@ describe("ToolRegistry.tools: shell mode end-to-end on task", () => {
             modelID: ModelID.make("opencode/claude-sonnet-4-6"),
             agent: general,
           })
-          const task = tools.find((t) => t.id === "task")!
+          const task = expose(tools).find((t) => t.id === "task")!
           // Sanity: parameters is shellInputSchema (just `script`)
           const parsed = task.parameters.parse({ script: "task list" })
           expect(parsed).toEqual({ script: "task list" })

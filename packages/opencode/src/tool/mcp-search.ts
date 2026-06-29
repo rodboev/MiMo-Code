@@ -226,7 +226,7 @@ export const McpSearchTool = Tool.define(
     return {
       description: DESCRIPTION,
       parameters,
-      execute: (params: McpSearchParams, ctx: Tool.Context) => {
+      execute: (params: McpSearchParams, ctx: Tool.Context): Effect.Effect<Tool.ExecuteResult> => {
         const raw = params as McpSearchParams & Record<string, unknown>
         const server = raw.server ?? (raw as any).mcp_name ?? (raw as any).server_name
         const tool = raw.tool ?? (raw as any).tool_name ?? (raw as any).name
@@ -247,7 +247,7 @@ export const McpSearchTool = Tool.define(
                 })
               : argsRaw)
           return yield* doCall(mcp, plugin, server, tool, args ?? {}, ctx)
-        })
+        }).pipe(Effect.orDie)
       },
     }
   }),

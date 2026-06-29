@@ -231,6 +231,53 @@ it.live("session.processor effect tests capture llm input cleanly", () =>
   ),
 )
 
+it.live("session.processor effect tests ignore tool calls while generating summaries", () =>
+  provideTmpdirServer(
+    ({ dir, llm }) =>
+      Effect.gen(function* () {
+        const { processors, session, provider } = yield* boot()
+
+        yield* llm.push(reply().tool("headroom_retrieve", { hash: "abc123" }).text("summary text").stop())
+
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "compact")
+        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+        msg.summary = true
+        yield* session.updateMessage(msg)
+        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        const handle = yield* processors.create({
+          assistantMessage: msg,
+          sessionID: chat.id,
+          model: mdl,
+        })
+
+        const value = yield* handle.process({
+          user: {
+            id: parent.id,
+            sessionID: chat.id,
+            role: "user",
+            time: parent.time,
+            agent: parent.agent,
+            model: { providerID: ref.providerID, modelID: ref.modelID },
+          } satisfies MessageV2.User,
+          sessionID: chat.id,
+          model: mdl,
+          agent: agent(),
+          system: [],
+          messages: [{ role: "user", content: "summarize" }],
+          tools: {},
+        })
+
+        const parts = MessageV2.parts(msg.id)
+
+        expect(value).toBe("continue")
+        expect(parts.some((part) => part.type === "text" && part.text === "summary text")).toBe(true)
+        expect(parts.some((part) => part.type === "tool")).toBe(false)
+      }),
+    { git: true, config: (url) => providerCfg(url) },
+  ),
+)
+
 it.live("session.processor effect tests preserve text start time", () =>
   provideTmpdirServer(
     ({ dir, llm }) =>

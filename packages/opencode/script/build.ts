@@ -9,6 +9,7 @@ import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin"
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const dir = path.resolve(__dirname, "..")
+const distDir = process.env.MIMOCODE_DIST_DIR || "dist"
 
 process.chdir(dir)
 
@@ -166,7 +167,7 @@ const targets = singleFlag
     })
   : allTargets
 
-await $`rm -rf dist`
+await $`rm -rf ${distDir}`
 
 const extDir = path.join(dir, "src", "ext")
 let stagedExt = false
@@ -219,7 +220,7 @@ for (const item of targets) {
     .filter(Boolean)
     .join("-")
   console.log(`building ${name}`)
-  await $`mkdir -p dist/${name}/bin`
+  await $`mkdir -p ${distDir}/${name}/bin`
 
   const localPath = path.resolve(dir, "node_modules/@opentui/core/parser.worker.js")
   const rootPath = path.resolve(dir, "../../node_modules/@opentui/core/parser.worker.js")
@@ -244,7 +245,7 @@ for (const item of targets) {
       autoloadTsconfig: true,
       autoloadPackageJson: true,
       target: name.replace(BINARY_PREFIX, "bun") as any,
-      outfile: `dist/${name}/bin/mimo`,
+      outfile: `${distDir}/${name}/bin/mimo`,
       execArgv: [`--user-agent=mimocode/${Script.version}`, "--use-system-ca", "--"],
       windows: {},
     },
@@ -262,7 +263,7 @@ for (const item of targets) {
 
   // Smoke test: only run if binary is for current platform
   if (item.os === process.platform && item.arch === process.arch && !item.abi) {
-    const binaryPath = `dist/${name}/bin/mimo`
+    const binaryPath = `${distDir}/${name}/bin/mimo`
     console.log(`Running smoke test: ${binaryPath} --version`)
     try {
       const versionOutput = await $`${binaryPath} --version`.text()
@@ -273,11 +274,11 @@ for (const item of targets) {
     }
   }
 
-  await $`rm -rf ./dist/${name}/bin/tui`
-  await Bun.file(`dist/${name}/README.md`).write(
+  await $`rm -rf ./${distDir}/${name}/bin/tui`
+  await Bun.file(`${distDir}/${name}/README.md`).write(
     `This is the ${item.os}-${item.arch} binary for [@mimo-ai/cli](https://www.npmjs.com/package/@mimo-ai/cli). Install that package directly.\n`,
   )
-  await Bun.file(`dist/${name}/package.json`).write(
+  await Bun.file(`${distDir}/${name}/package.json`).write(
     JSON.stringify(
       {
         name: `@mimo-ai/${name}`,
@@ -304,24 +305,24 @@ for (const item of targets) {
 if (Script.release) {
   for (const key of Object.keys(binaries)) {
     if (key.includes("linux")) {
-      await $`tar -czf ../../${key}.tar.gz *`.cwd(`dist/${key}/bin`)
+      await $`tar -czf ../../${key}.tar.gz *`.cwd(`${distDir}/${key}/bin`)
     } else {
-      await $`zip -r ../../${key}.zip *`.cwd(`dist/${key}/bin`)
+      await $`zip -r ../../${key}.zip *`.cwd(`${distDir}/${key}/bin`)
     }
   }
-  await $`gh release upload v${Script.version} ./dist/*.zip ./dist/*.tar.gz --clobber --repo ${process.env.GH_REPO}`
+  await $`gh release upload v${Script.version} ./${distDir}/*.zip ./${distDir}/*.tar.gz --clobber --repo ${process.env.GH_REPO}`
 
   // Also publish to Xiaomi FDS (fast download in mainland China; the install
   // script reads from there). Skipped when credentials are absent so local
   // release builds still work.
   if (process.env.MIMO_FDS_AK && process.env.MIMO_FDS_SK) {
     const { uploadFile } = await import("./fds-upload.ts")
-    const archives = fs.readdirSync("dist").filter((f) => f.endsWith(".zip") || f.endsWith(".tar.gz"))
+    const archives = fs.readdirSync(distDir).filter((f) => f.endsWith(".zip") || f.endsWith(".tar.gz"))
     for (const file of archives) {
-      await uploadFile(`dist/${file}`, `releases/v${Script.version}/${file}`)
+      await uploadFile(`${distDir}/${file}`, `releases/v${Script.version}/${file}`)
       console.log(`Uploaded to FDS: releases/v${Script.version}/${file}`)
     }
-    const tmpLatest = "dist/_latest.txt"
+    const tmpLatest = `${distDir}/_latest.txt`
     await Bun.write(tmpLatest, Script.version)
     await uploadFile(tmpLatest, "releases/latest", "text/plain")
     console.log(`Uploaded to FDS: releases/latest -> ${Script.version}`)

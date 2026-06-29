@@ -65,11 +65,12 @@ Use this skill.
 
           const registry = yield* ToolRegistry.Service
           const agent = { name: "build", mode: "primary" as const, permission: [], options: {} }
-          const tool = (yield* registry.tools({
+          const tools = yield* registry.tools({
             providerID: "opencode" as any,
             modelID: "gpt-5" as any,
             agent,
-          })).find((tool) => tool.id === SkillTool.id)
+          })
+          const tool = [...tools.eager, ...tools.deferred, ...(tools.search ? [tools.search] : [])].find((tool) => tool.id === SkillTool.id)
           if (!tool) throw new Error("Skill tool not found")
 
           const requests: Array<Omit<Permission.Request, "id" | "sessionID" | "tool">> = []

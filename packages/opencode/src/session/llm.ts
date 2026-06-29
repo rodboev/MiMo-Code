@@ -672,7 +672,7 @@ const live: Layer.Layer<
             const fallbackChain = MODEL_FALLBACK_CHAINS[input.model.id] ?? []
             const modelIds = [input.model.id, ...fallbackChain]
 
-            const tryModel = (idx: number): Effect.Effect<typeof result, unknown> =>
+            const tryModel = (idx: number): Effect.Effect<Result, unknown> =>
               Effect.gen(function* () {
                 const currentModel = idx === 0
                   ? input.model
@@ -695,10 +695,8 @@ const live: Layer.Layer<
                 )
               })
 
-            type Result = Awaited<ReturnType<typeof run extends (...args: any) => Effect.Effect<infer R, any> ? (...args: any) => Promise<R> : never>>
-
-            const withFallbacks = modelIds.reduceRight(
-              (next: Effect.Effect<any, unknown>, _id: string, idx: number) =>
+            const withFallbacks = modelIds.reduceRight<Effect.Effect<Result, unknown>>(
+              (next, _id, idx) =>
                 tryModel(idx).pipe(
                   Effect.catch((error) => {
                     if (idx < modelIds.length - 1) {
@@ -711,7 +709,7 @@ const live: Layer.Layer<
                     return Effect.fail(error)
                   }),
                 ),
-              Effect.fail(new Error("no models configured")) as Effect.Effect<any, unknown>,
+              Effect.fail(new Error("no models configured")),
             )
 
             const result = yield* withFallbacks

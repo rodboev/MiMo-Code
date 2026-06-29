@@ -916,7 +916,7 @@ itTool.live("compose's tool list contains apply_patch on GPT-5+ but not on Claud
         providerID: ProviderID.make("openai"),
         agent: compose!,
       })
-      const gptIDs = gptTools.map((t) => t.id)
+      const gptIDs = [...gptTools.eager, ...gptTools.deferred, ...(gptTools.search ? [gptTools.search] : [])].map((t) => t.id)
       expect(gptIDs).toContain("apply_patch")
       expect(gptIDs).not.toContain("edit")
       expect(gptIDs).not.toContain("write")
@@ -926,7 +926,7 @@ itTool.live("compose's tool list contains apply_patch on GPT-5+ but not on Claud
         providerID: ProviderID.make("anthropic"),
         agent: compose!,
       })
-      const claudeIDs = claudeTools.map((t) => t.id)
+      const claudeIDs = [...claudeTools.eager, ...claudeTools.deferred, ...(claudeTools.search ? [claudeTools.search] : [])].map((t) => t.id)
       expect(claudeIDs).toContain("edit")
       expect(claudeIDs).toContain("write")
       expect(claudeIDs).not.toContain("apply_patch")
